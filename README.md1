@@ -1,336 +1,232 @@
-# Connecting an On-Premises OpenShift Application to AWS-Hosted MongoDB (Atlas vs. DocumentDB)
-Detailed plan on connecting an on-premises OpenShift cluster (KCS) to a managed MongoDB database in AWS,  two primary options – MongoDB Atlas (MongoDB Inc.’s cloud service) and Amazon DocumentDB (AWS’s MongoDB-compatible service)
-# MongoDB Atlas
-MongoDB Atlas is MongoDB Inc.’s fully-managed, cloud-native Database-as-a-Service (DBaaS). It provides automated provisioning, scaling, backups, patching, and security for MongoDB clusters, it supports major CLoud service providers.
-On AWS, each Atlas node is an EC2 instance in a MongoDB-managed VPC, using EBS GP3 for storage and S3 for snapshots. for connectivity we use IP Access Lists for simple, public-endpoint connectivity. But for our current state, it is not suitable due to mongodb cloud service restriction. The better option on AWS is the native solution of DocumentDB.
-
-# Amazon DocumentDB
-Amazon DocumentDB (with MongoDB compatibility) is Amazon Web Services’ fully managed, highly available document database service designed to be compatible with MongoDB workloads. It handles the undifferentiated heavy lifting of database management. it better suits our use case and has inbuilt AWS options for disaster recovery.
-
-Before starting, we need a roadmap on how to integrate AWS DocumentDB with KCS (openshift cluster), network configurations and deployment changes.
-
-This document will provide a basic walkthrough for connecting an on-premises OpenShift cluster to an Amazon DocumentDB cluster in AWS (us-gov-west-1)
-
-# Connecting OpenShift to Amazon DocumentDB
-
-1. **Create an Amazon DocumentDB Cluster:** using terraform IaC for AWS we need to provision a DocumentDB cluster with suitable to sie based on the use case. and using subnet group spanning multiple Availability Zones for high availability.
-
-2. **Network Integration between OpenShift and AWS**
-   2.1 There are two primary options for this integration: a **Site-to-Site VPN** or **AWS Direct Connect**. but for our use case site to site VPN would be enough.
-
-   2.2 As our data centers are on-prem (KCS), we need connected to the AWS VPC via a Site-to-Site VPN or AWS Direct Connect, ensuring that routing is in place. The OpenShift nodes’ network should be allowed to reach the DocumentDB subnet and port.
-   
- **Site-to-Site VPN:** We need to set up an IPsec VPN tunnel between our on-premises network and the AWS VPC. For verification, after setting up VPN, we can test basic network connectivity. For example, from an on-premises host ( OpenShift nodes), ping an EC2 instance in the AWS VPC or use telnet/nc to test connectivity to the DocumentDB port (27017) on the AWS side. Ensure security rules are not blocking the traffic.
-
- 2.3 **AWS VPC and Subnet Configuration**: 
- **VPC Setup:**
-
-Using an AWS VPC in us-gov-west-1 to host DocumentDB.
-
-DocumentDB should be placed in private subnets (no public IPs), spanning at least two availability zones for high availability.
-
-Grouping these subnets in a DB Subnet Group during cluster creation.
-
-**Network Routing:**
-
-Update route tables for these private subnets to send on-premises traffic, This allows DocumentDB to communicate with on-prem resources securely.
-
-**DNS Resolution:**
-
-DocumentDB endpoints use AWS internal DNS (*.docdb.amazonaws.com). With AmazonProvidedDNS (VPC default), resolution works automatically over VPN.
-
-Using the custom DNS of Boeing, set up a conditional forwarder for docdb.amazonaws.com to the VPC DNS resolver.
-These settings provide secure, private, and highly available DocumentDB access from both AWS and on-prem environments, with reliable connectivity and name resolution.
-
-2.4 **AWS Security Group Configuration**
-Create a new Security Group in the VPC where your DocumentDB cluster lives.
-
-Inbound rules:
-Type: Custom TCP Rule
-Port: 27017 (the MongoDB default)
-Source: our on-prem network CIDR or our VPN/Direct Connect tunnel range.
-Attach this Security Group to the DocumentDB cluster’s primary and replica instances.
-
-2. On-Premises Firewall Rules
-Outbound rule on your datacenter (or office) firewall:
-Destination: DocumentDB’s subnet range (or specific cluster endpoint IPs) in your AWS VPC.
-Port: 27017/TCP
-Source: OpenShift node subnets (or the application subnet CIDR).
-As we are using a VPN, set the AWS-side IP range as “internal”— the firewall must allow that private-to-private traffic on 27017/TCP.
-
-3. No Public Exposure
-DocumentDB endpoints are private-only (no Internet-facing endpoints).
-All client traffic must traverse your private network (VPN, Direct Connect, or a bastion host/proxy in AWS).
-
-# DocumentDB Endpoints and Connectivity4
-1. **Cluster Endpoints & Connection Strings:** Amazon DocumentDB provides a Cluster Endpoint (writer endpoint) for the cluster. Always routes to the current primary.
-   eg: mydocdbcluster.cluster-ABCDEFGHI.us-west-1.docdb.amazonaws.com:27017
-2. **Instance Endpoints:**
-Each node also has its own DNS name (e.g., mydocdbcluster-instance-1.XXXXXXXX.us-west-1.docdb.amazonaws.com).
-3. **DNS and Access:**
-The endpoints above are DNS names resolving to internal IPs in AWS. Since our OpenShift cluster is now network-connected, it should resolve and reach these.
-Ensuring our DNS resolution is working. If resolution fails, double-check that our on-prem DNS setup forwards queries for docdb.amazonaws.com appropriately. We can use AWS VPC DNS by default over the VPN.
-
-# OpenShift Configuration
-Here’s a step-by-step to configure OpenShift apps into Amazon DocumentDB via Secrets, ConfigMaps and Deployment tweaks:
-
----
-
-## 1. Create a Secret for your credentials
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: docdb-credentials
-type: Opaque
-stringData:
-  username: yourDbUser
-  password: yourStrongPassword
-```
-
-```bash
-oc apply -f docdb-credentials-secret.yaml
-```
-
----
-
-## 2. Import the TLS CA bundle
-
-Amazon DocumentDB speaks TLS with Amazon’s CA. Download the RDS CA bundle (e.g. `rds-combined-ca-bundle.pem`) and store it in a Secret:
-
-```bash
-# locally fetch the CA bundle
-curl https://truststore.pki.rds.amazonaws.com/2024/rds-ca-2019-root.pem \
-  -o rds-combined-ca-bundle.pem
-
-# create the secret
-oc create secret generic docdb-tls-ca \
-  --from-file=ca.pem=./rds-combined-ca-bundle.pem
-```
-
----
-
-## 3. Store connection string in a ConfigMap
-
-Put cluster endpoint and options in a ConfigMap so it’s easy to rotate or reuse:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: docdb-config
-data:
-  MONGODB_URI: >-
-    mongodb://$(DB_USER):$(DB_PASS)@
-    mydocdbcluster.cluster-ABCDEFGHI.us-west-1.docdb.amazonaws.com:27017/
-    myDatabase?ssl=true&replicaSet=rs0&readPreference=secondaryPreferred
-```
-
-```bash
-oc apply -f docdb-configmap.yaml
-```
-
----
-
-## 4. Update Deployment to consume them
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: my-app
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: my-app
-  template:
-    metadata:
-      labels:
-        app: my-app
-    spec:
-      containers:
-      - name: my-app
-        image: your-registry/my-app:latest
-        env:
-        - name: DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: docdb-credentials
-              key: username
-        - name: DB_PASS
-          valueFrom:
-            secretKeyRef:
-              name: docdb-credentials
-              key: password
-        - name: MONGODB_URI
-          valueFrom:
-            configMapKeyRef:
-              name: docdb-config
-              key: MONGODB_URI
-        volumeMounts:
-        - name: tls-ca
-          mountPath: /etc/ssl/certs/docdb-ca.pem
-          subPath: ca.pem
-          readOnly: true
-      volumes:
-      - name: tls-ca
-        secret:
-          secretName: docdb-tls-ca
-```
-
-1. **Environment variables** inject `DB_USER`, `DB_PASS` and the full `MONGODB_URI`.
-2. **Volume mount** places the CA at `/etc/ssl/certs/docdb-ca.pem`.
-3. Make sure the app’s MongoDB client is configured to trust that file (e.g., `sslCAFile=/etc/ssl/certs/docdb-ca.pem`).
-
----
-
-
-### Final sanity checks
-
-* `oc get secret/docdb-credentials` and `oc get secret/docdb-tls-ca` exist.
-* `oc get configmap/docdb-config` shows your URI.
-* Pods mount the CA:
-
-  ```bash
-  oc rsh <pod-name> ls /etc/ssl/certs | grep docdb-ca.pem
-  ```
-* App logs show successful connection (no SSL or auth errors).
-
-Once everything is in place, the OpenShift pods will securely authenticate and TLS-encrypt traffic to the Amazon DocumentDB cluster without any credentials or certificates baked into the image.
-
-# Application Connection
-To connect the application on OpenShift to Amazon DocumentDB, construct the MongoDB URI using the standard format and include required parameters: tls=true for encryption, replicaSet=rs0 to identify the cluster, and retryWrites=false since DocumentDB does not support retryable writes. Optionally, use readPreference=secondaryPreferred to distribute reads across replicas. Store database credentials in a Kubernetes Secret and the connection string or its components in a ConfigMap. Mount the Amazon RDS CA certificate as a volume from a Secret and reference it in our application's TLS configuration. Ensure the OpenShift pods can resolve the DocumentDB cluster's DNS and establish a TLS connection using the mounted certificate.
-
-# Verification and Testing
-**Smoke Tests: Connectivity and Queries**:
-* **Check application logs**:
-  Run `oc logs deployment/myapp` to view startup logs and connection attempts.
-
-* **Look for common errors**:
-  * **TLS/SSL error** → CA bundle missing or not mounted correctly.
-  * **Authentication error** → Incorrect username/password in Secret.
-  * **Network timeout** → Misconfigured Security Group or firewall/VPN issue.
-
-* **Confirm DNS resolution**:
-  Use `host <docdb-endpoint>` inside the pod to verify name resolution.
-
-* **Test TLS connection**:
-  Run `openssl s_client -connect <host>:27017 -CAfile <mounted-ca-path>` from inside the pod.
-
-* **Run simple query**:
-  Use a CLI or the app itself to insert/read a document from the target database.
-
-* **Remove temporary rules**:
-  If ICMP/ping was enabled for testing, remove those Security Group rules after verification.
-
-# Backup and Data Recovery – Key Points
-
-#### **AWS Automated Backups**
-
-* DocumentDB supports **automated backups** with configurable retention (1–35 days).
-* **Check and adjust** the "Backup retention period" in the AWS Console to match your RPO (e.g., 7 or 14 days).
-* Ensure a **daily backup window** is defined for consistent snapshots.
-* **Point-in-time restore** creates a new cluster with a new endpoint; existing cluster is unaffected.
-
-#### **On-Prem / Manual Backups**
-
-* Use `mongodump` for logical backups; run as a **cronjob pod** in OpenShift or manually.
-* Include `--sslCAFile` to ensure TLS connection to DocumentDB.
-* Store dumps safely—on-prem backup server or S3 if allowed.
-* Be aware that `mongodump` is **resource-intensive** on large datasets; prefer AWS snapshots where possible.
-
-#### **Restore Drills**
-
-* Periodically test **AWS restore** by spinning up a new cluster from backup and validating with a test app.
-* Validate `mongodump` backups using `mongorestore` to a test database (local or cloud).
-
-#### **Disaster Recovery Considerations**
-
-* DocumentDB **does not support cross-region or on-prem replication**.
-* DR to other regions or on-prem must rely on manual backup/export or external tools (e.g., CDC-based).
-
-# sample CronJob YAML (OpenShift/Kubernetes)
----
-
-### `mongodump` CronJob YAML (OpenShift/Kubernetes)
-
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: docdb-backup-job
-spec:
-  schedule: "0 2 * * *"  # Runs daily at 2 AM
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          containers:
-          - name: mongodump
-            image: mongo:4.4
-            command:
-            - /bin/sh
-            - -c
-            - |
-              mongodump \
-                --uri="mongodb://$(DB_USER):$(DB_PASS)@mydocdbcluster.cluster-XYZ.us-west-1.docdb.amazonaws.com:27017/mydatabase?tls=true&retryWrites=false" \
-                --sslCAFile=/etc/ssl/certs/rds-combined-ca-bundle.pem \
-                --out=/backup/dump-$(date +%F)
-            env:
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: docdb-credentials
-                  key: username
-            - name: DB_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: docdb-credentials
-                  key: password
-            volumeMounts:
-            - name: cert-volume
-              mountPath: /etc/ssl/certs/rds-combined-ca-bundle.pem
-              subPath: ca.pem
-            - name: backup-volume
-              mountPath: /backup
-          restartPolicy: OnFailure
-          volumes:
-          - name: cert-volume
-            secret:
-              secretName: docdb-tls-ca
-          - name: backup-volume
-            persistentVolumeClaim:
-              claimName: docdb-backup-pvc  # Your PVC should be pre-created
-```
-
----
-
-### AWS CLI – Restore DocumentDB Cluster from Backup
-
-```bash
-aws docdb restore-db-cluster-to-point-in-time \
-  --db-cluster-identifier mydocdbcluster-restore-2025 \
-  --source-db-cluster-identifier mydocdbcluster \
-  --restore-to-time 2025-05-26T01:00:00Z \
-  --engine docdb \
-  --vpc-security-group-ids sg-xxxxxxxx \
-  --subnet-group-name my-subnet-group
-```
-
-* `--restore-to-time`: ISO timestamp within your retention period
-* Creates a **new cluster** with its own endpoint
-* Attach instances separately using `aws docdb create-db-instance`
-
----
-
-
-
-
-
-
-
-
-
-
+# Include shared pipelines for secret detection and common utilities
+include:
+  - project: ecs-catalog/pipelines/general
+    ref: secret-detection_3.3
+    file: /secret-detection/pipeline.yml
+  - project: ecs-catalog/pipelines/general
+    ref: shared_5.3
+    file: /.shared/pipeline.yml
+
+# CI variables
+variables:
+  CI_PROJECT_EMAIL: "${CI_ECS_GITLAB_ACCOUNT}@boeing.com"
+  CLUSTER_NAME: your-eks-cluster-name  # Replace with your actual EKS cluster name
+  CHART_NAME: your-application-chart   # Replace with your Helm chart name
+  NODE_IMAGE: 'registry.web.boeing.com/container/boeing-images/stack/ubi8-node:8.9-1028-18.14.2'
+  IMAGE_TAG: "${CI_COMMIT_REF_NAME}-${CI_PIPELINE_ID}-${CI_COMMIT_SHORT_SHA}"
+  FQ_IMAGE_NAME: "${CI_REGISTRY_IMAGE}:${CI_PIPELINE_ID}"
+  RULES_CHANGES_PATH: '**/*'
+  AWS_REGION: us-gov-west-1  # Adjust to your AWS region
+  ENTERPRISE_DOCKER_REGISTRY: registry.web.boeing.com  # Your Docker registry
+
+# Stages
+stages:
+  - checkout
+  - secret_detection
+  - build
+  - package
+  - deploy
+  - test
+  - destroy
+
+# Default configuration for all jobs
+default:
+  tags:
+    - aws-155120177767  # Replace with your AWS runner tags
+    - docker
+    - us-gov-west-1
+  image:
+    name: $ENTERPRISE_DOCKER_REGISTRY/ecs-catalog/docker-images/terraform-cloud-cli/v1.8/aws-v2:1
+
+# Base Rules
+.base-rules:
+  variables:
+    CF_ORG: TasOrgName
+
+# Reusable script for installing Helm
+.install_helm:
+  script:
+    - curl -LO https://sres.web.boeing.com/artifactory/osstools/helmclient/3.4.1/helm-v3.4.1-linux-amd64.tar.gz -u "$CI_ECS_SRES_ACCOUNT:$CI_ECS_SRES_TOKEN" --insecure
+    - tar -xf helm-v3.4.1-linux-amd64.tar.gz
+    - mv linux-amd64/helm /usr/local/bin/helm
+
+# Reusable script for updating EKS configuration
+.update_eks_config:
+  script:
+    - aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+    - kubectl delete secret docker-registry regcred --ignore-not-found
+    - kubectl create secret docker-registry regcred --docker-server=$ENTERPRISE_DOCKER_REGISTRY --docker-username=$CI_ECS_GITLAB_ACCOUNT --docker-password=$CI_ECS_GITLAB_TOKEN --docker-email=$CI_PROJECT_EMAIL
+
+# Build stage - compile and test the application
+build:
+  stage: build
+  image: $NODE_IMAGE
+  before_script:
+    - npm config set registry=https://sres.web.boeing.com/artifactory/api/npm/npm-releases
+    - npm config set //sres.web.boeing.com/:_auth=$(echo -n ${ARTIFACTORY_USERNAME}:${ARTIFACTORY_API_TOKEN} | base64 -w 0)
+    - npm install
+  script:
+    - echo "Build and Test"
+    - npm run build
+    # Uncomment the line below for running tests
+    # - npm run test -- --run --testTimeout=30000 --hookTimeout=30000
+  except:
+    - tags
+    - schedules
+  cache:
+    key: $CI_COMMIT_REF_NAME
+    paths:
+      - node_modules/
+  artifacts:
+    name: '${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}'
+    when: always
+    expire_in: 1 week
+    paths:
+      - ./*.js
+      - ./package*.json
+      - dist/
+      - node_modules/
+      - charts/  # Include Helm charts if they exist
+
+# Package stage - build Docker image
+package:
+  stage: package
+  only:
+    - dev-deploy
+    - test
+    - main
+  image: $ENTERPRISE_DOCKER_REGISTRY/ecs-catalog/docker-images/terraform-cloud-cli/v1.8/aws-v2:1
+  variables:
+    STORAGE_DRIVER: vfs
+    BUILDAH_FORMAT: docker
+    BUILDAH_ISOLATION: chroot
+  script:
+    - echo "Building Docker image for EKS deployment"
+    - chmod +x pipeline/package.sh
+    - ./pipeline/package.sh
+    # Push image to registry
+    - docker tag $FQ_IMAGE_NAME $ENTERPRISE_DOCKER_REGISTRY/$CI_PROJECT_PATH:$IMAGE_TAG
+    - docker push $ENTERPRISE_DOCKER_REGISTRY/$CI_PROJECT_PATH:$IMAGE_TAG
+  except:
+    - schedules
+  needs:
+    - build
+
+# Deploy Template for EKS
+.deploy-template:
+  stage: deploy
+  needs:
+    - build
+    - package
+  before_script:
+    - !reference [.install_helm, script]
+    - !reference [.update_eks_config, script]
+  script:
+    - echo "Deploying to EKS cluster $CLUSTER_NAME"
+    # Update image tag in values or use --set flag
+    - |
+      if [ -f charts/values-${CI_ENVIRONMENT_NAME}.yaml ]; then
+        VALUES_FILE="charts/values-${CI_ENVIRONMENT_NAME}.yaml"
+      else
+        VALUES_FILE="charts/values.yaml"
+      fi
+    - |
+      helm upgrade --install $CHART_NAME-${CI_ENVIRONMENT_NAME} ./charts \
+        --namespace ${CI_ENVIRONMENT_NAME} \
+        --create-namespace \
+        --values $VALUES_FILE \
+        --set image.repository=$ENTERPRISE_DOCKER_REGISTRY/$CI_PROJECT_PATH \
+        --set image.tag=$IMAGE_TAG \
+        --wait \
+        --timeout=300s
+
+# Deploy Dev
+deploy-dev:
+  extends: .deploy-template
+  environment: 
+    name: dev
+    url: https://$CHART_NAME-dev.$AWS_REGION.elb.amazonaws.com  # Adjust URL pattern as needed
+  variables:
+    CLUSTER_NAME: your-dev-eks-cluster  # Replace with dev cluster name
+  only:
+    - dev-deploy
+
+# Deploy Test
+deploy-test:
+  extends: .deploy-template
+  environment: 
+    name: test
+    url: https://$CHART_NAME-test.$AWS_REGION.elb.amazonaws.com  # Adjust URL pattern as needed
+  variables:
+    CLUSTER_NAME: your-test-eks-cluster  # Replace with test cluster name
+  only:
+    - test
+  when: manual
+
+# Deploy Prod
+deploy-prod:
+  extends: .deploy-template
+  environment: 
+    name: prod
+    url: https://$CHART_NAME-prod.$AWS_REGION.elb.amazonaws.com  # Adjust URL pattern as needed
+  variables:
+    CLUSTER_NAME: your-prod-eks-cluster  # Replace with prod cluster name
+  only:
+    - main
+  when: manual
+
+# Verify application deployment
+verify_application:
+  stage: test
+  needs:
+    - deploy-dev
+  script:
+    - !reference [.update_eks_config, script]
+    - |
+      # Wait for ingress to be ready
+      echo "Waiting for ingress to be populated..."
+      address=$(kubectl get ingress --namespace dev --no-headers | awk '{print $4}')
+      while [ -z "$address" ] || [ "$address" == "<none>" ]; do
+        echo "Waiting for ingress address to be populated..."
+        sleep 10
+        address=$(kubectl get ingress --namespace dev --no-headers | awk '{print $4}')
+      done
+      echo "Ingress address: $address"
+      
+      # Test the application endpoint
+      echo "Testing application endpoint..."
+      response=$(curl --connect-timeout 10 --max-time 10 --retry 10 --retry-delay 10 --retry-max-time 30 --write-out "HTTPSTATUS:%{http_code}" --silent --output /dev/null http://$address)
+      http_code=$(echo $response | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+      
+      if [ "$http_code" -eq 200 ]; then
+        echo "Application is responding correctly (HTTP $http_code)"
+      else
+        echo "Application test failed (HTTP $http_code)"
+        exit 1
+      fi
+  only:
+    - dev-deploy
+  allow_failure: true
+
+# Manual cleanup job
+uninstall_chart:
+  stage: destroy
+  when: manual
+  script:
+    - !reference [.install_helm, script]
+    - !reference [.update_eks_config, script]
+    - |
+      echo "Listing current Helm releases..."
+      helm list --all-namespaces
+      
+      # Uninstall from all environments
+      for env in dev test prod; do
+        echo "Checking for $CHART_NAME-$env..."
+        if helm list --namespace $env | grep -q "$CHART_NAME-$env"; then
+          echo "Uninstalling $CHART_NAME-$env from namespace $env..."
+          helm uninstall $CHART_NAME-$env --namespace $env
+        else
+          echo "Chart $CHART_NAME-$env not found in namespace $env"
+        fi
+      done
+  allow_failure: true
