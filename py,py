@@ -71,17 +71,29 @@ class SecureBrowserAuth(SignOnStrategy):
         }
 
     def _start_any_available_driver(self):
-        """Try starting a supported browser using webdriver-manager (Selenium >= 4.6)."""
+        """Try starting a supported browser using manual driver paths or WebDriver Manager as fallback."""
         errors = []
         
-        # Try Firefox first (since you have it installed)
+        # Try Firefox first with manual path, then WebDriver Manager
         try:
-            logging.info("Trying to start Firefox with WebDriver Manager")
-            service = FirefoxService(GeckoDriverManager().install())
-            return webdriver.Firefox(service=service, options=self.browser_options.get("firefox"))
+            logging.info("Trying to start Firefox")
+            # Try manual path first (if drivers are in PATH or specific location)
+            try:
+                return webdriver.Firefox(options=self.browser_options.get("firefox"))
+            except Exception:
+                # Fallback to specific path
+                service = FirefoxService("C:/WebDrivers/geckodriver.exe")
+                return webdriver.Firefox(service=service, options=self.browser_options.get("firefox"))
         except Exception as e:
-            errors.append(f"Firefox: {str(e)}")
-            logging.warning(f"Failed to start Firefox: {e}")
+            try:
+                # Last resort: WebDriver Manager
+                logging.info("Trying Firefox with WebDriver Manager")
+                service = FirefoxService(GeckoDriverManager().install())
+                return webdriver.Firefox(service=service, options=self.browser_options.get("firefox"))
+            except Exception as e2:
+                errors.append(f"Firefox: Manual path failed: {str(e)}, WebDriver Manager failed: {str(e2)}")
+                logging.warning(f"Failed to start Firefox: {e}")
+
 
         # Try Edge (since you have it installed)
         try:
