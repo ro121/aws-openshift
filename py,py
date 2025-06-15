@@ -1,0 +1,107 @@
+import logging
+from urllib.parse import urlparse
+import requests
+from typing import Tuple, Optional
+
+from ..models import AuthTypeEnum
+from ..exceptions import AuthSSOError
+from ..signon_strategy import SignOnStrategy
+from ..utility import ResponseUtils
+
+from selenium import webdriver
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.common.exceptions import WebDriverException, TimeoutException
+
+# Add these imports for WebDriver Manager
+from selenium.webdriver.firefox.service import Service as FirefoxService
+from selenium.webdriver.edge.service import Service as EdgeService
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.firefox import GeckoDriverManager
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
+from webdriver_manager.chrome import ChromeDriverManager
+
+class SecureBrowserAuth(SignOnStrategy):
+    
+    def __init__(self, app_url: str, post_redirect_url: str):
+        super().__init__(app_url, post_redirect_url)
+        self.browser_options = self._get_browser_options()
+
+        parsed = urlparse(self.post_redirect_url)
+        self.sso_domain = parsed.hostname
+        self.sso_post_login = f"{parsed.hostname}{parsed.path}"
+        if not self.sso_domain and self.sso_post_login:
+            raise AuthSSOError(f"{self.name}: Invalid post_redirect_url; missing hostname.")
+
+    @property
+    def name(self) -> AuthTypeEnum:
+        return AuthTypeEnum.SECURE_BROWSER
+
+    def authenticate(self) -> Tuple[requests.Session, Optional[str]]:
+        try:
+            driver = self._start_any_available_driver()
+            logging.info(f"{self.name}: Launched browser, navigating to {self.app_url}")
+            driver.delete_all_cookies()
+            driver.get(self.app_url)
+            WebDriverWait(driver, 300).until(lambda d: self.sso_post_login in d.current_url)
+            logging.info(f"{self.name}: SSO completed at {driver.current_url}")
+            saml_html = driver.page_source
+            session = ResponseUtils.create_session()
+        except TimeoutException:
+            raise AuthSSOError(f"{self.name}: Timed out waiting for SSO redirect.")
+        except WebDriverException as e:
+            saml_html = driver.page_source
+            session = ResponseUtils.create_session()
+        except TimeoutException:
+            raise AuthSSOError(f"{self.name}: Timed out waiting for SSO redirect.")
+        except WebDriverException as e:
+            raise AuthSSOError(f"{self.name}: WebDriver error during SSO: {e}")
+        except Exception as e:
+            raise AuthSSOError(f"{self.name}: Unexpected SSO error: {e}")
+        finally:
+            driver.quit()
+            logging.info(f"{self.name}: Browser closed.")
+        return session, saml_html
+
+    def _get_browser_options(self):
+        chrome = webdriver.ChromeOptions()
+        chrome.add_argument("--start-maximized")
+        firefox = webdriver.FirefoxOptions()
+        edge = webdriver.EdgeOptions()
+        return {
+            "chrome": chrome,
+            "firefox": firefox,
+            "edge": edge,
+        }
+
+    def _start_any_available_driver(self):
+        """Try starting a supported browser using webdriver-manager (Selenium >= 4.6)."""
+        errors = []
+        
+        # Try Firefox first (since you have it installed)
+        try:
+            logging.info("Trying to start Firefox with WebDriver Manager")
+            service = FirefoxService(GeckoDriverManager().install())
+            return webdriver.Firefox(service=service, options=self.browser_options.get("firefox"))
+        except Exception as e:
+            errors.append(f"Firefox: {str(e)}")
+            logging.warning(f"Failed to start Firefox: {e}")
+
+        # Try Edge (since you have it installed)
+        try:
+            logging.info("Trying to start Edge with WebDriver Manager")
+            service = EdgeService(EdgeChromiumDriverManager().install())
+            return webdriver.Edge(service=service, options=self.browser_options.get("edge"))
+        except Exception as e:
+            errors.append(f"Edge: {str(e)}")
+            logging.warning(f"Failed to start Edge: {e}")
+
+        # Try Chrome as fallback
+        try:
+            logging.info("Trying to start Chrome with WebDriver Manager")
+            service = ChromeService(ChromeDriverManager().install())
+            return webdriver.Chrome(service=service, options=self.browser_options.get("chrome"))
+        except Exception as e:
+            errors.append(f"Chrome: {str(e)}")
+            logging.warning(f"Failed to start Chrome: {e}")
+
+        raise AuthSSOError(f"{self.name}: Failed to launch any supported browser.\n" + "\n".join(errors))
