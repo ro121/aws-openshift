@@ -43,6 +43,16 @@ class SecureBrowserAuth(SignOnStrategy):
             logging.info(f"{self.name}: Launched browser, navigating to {self.app_url}")
             driver.delete_all_cookies()
             driver.get(self.app_url)
+            # Debug: Log what we're looking for and what we're getting
+            logging.info(f"{self.name}: Waiting for URL containing: {self.sso_post_login}")
+            logging.info(f"{self.name}: Current URL before wait: {driver.current_url}")
+            
+            # Add more detailed waiting logic with periodic logging
+            def check_url_change(driver):
+                current_url = driver.current_url
+                logging.info(f"{self.name}: Current URL: {current_url}")
+                return self.sso_post_login in current_url
+
             WebDriverWait(driver, 300).until(lambda d: self.sso_post_login in d.current_url)
             logging.info(f"{self.name}: SSO completed at {driver.current_url}")
             saml_html = driver.page_source
