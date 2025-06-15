@@ -37,6 +37,7 @@ class SecureBrowserAuth(SignOnStrategy):
         return AuthTypeEnum.SECURE_BROWSER
 
     def authenticate(self) -> Tuple[requests.Session, Optional[str]]:
+        driver = None  # Initialize driver variable
         try:
             driver = self._start_any_available_driver()
             logging.info(f"{self.name}: Launched browser, navigating to {self.app_url}")
@@ -49,17 +50,13 @@ class SecureBrowserAuth(SignOnStrategy):
         except TimeoutException:
             raise AuthSSOError(f"{self.name}: Timed out waiting for SSO redirect.")
         except WebDriverException as e:
-            saml_html = driver.page_source
-            session = ResponseUtils.create_session()
-        except TimeoutException:
-            raise AuthSSOError(f"{self.name}: Timed out waiting for SSO redirect.")
-        except WebDriverException as e:
             raise AuthSSOError(f"{self.name}: WebDriver error during SSO: {e}")
         except Exception as e:
             raise AuthSSOError(f"{self.name}: Unexpected SSO error: {e}")
         finally:
-            driver.quit()
-            logging.info(f"{self.name}: Browser closed.")
+            if driver:  # Only quit if driver was successfully created
+                driver.quit()
+                logging.info(f"{self.name}: Browser closed.")
         return session, saml_html
 
     def _get_browser_options(self):
