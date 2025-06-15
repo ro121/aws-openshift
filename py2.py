@@ -18,15 +18,12 @@ class AutoSignOnAuth(SignOnStrategy):
         return AuthTypeEnum.AUTO_SIGN_ON
     
     def authenticate(self) -> Tuple[requests.Session, Optional[str]]:
-        # Method 1: Specify the path to geckodriver directly
-        service = Service(executable_path=r'C:\webdrivers\geckodriver.exe')
-        
-        # Optional: Configure Firefox options
+        # Since geckodriver is now in PATH, you can use it directly
         firefox_options = Options()
         # firefox_options.add_argument('--headless')  # Uncomment for headless mode
         
-        # Create Firefox driver with service and options
-        driver = webdriver.Firefox(service=service, options=firefox_options)
+        # Create Firefox driver (geckodriver will be found in PATH)
+        driver = webdriver.Firefox(options=firefox_options)
         
         try:
             fragment, gas_server = self._fetch_redirect_fragment()
