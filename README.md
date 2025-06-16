@@ -1,232 +1,60 @@
-# Include shared pipelines for secret detection and common utilities
-include:
-  - project: ecs-catalog/pipelines/general
-    ref: secret-detection_3.3
-    file: /secret-detection/pipeline.yml
-  - project: ecs-catalog/pipelines/general
-    ref: shared_5.3
-    file: /.shared/pipeline.yml
+## Resource Quota Increase Request Report
 
-# CI variables
-variables:
-  CI_PROJECT_EMAIL: "${CI_ECS_GITLAB_ACCOUNT}@boeing.com"
-  CLUSTER_NAME: your-eks-cluster-name  # Replace with your actual EKS cluster name
-  CHART_NAME: your-application-chart   # Replace with your Helm chart name
-  NODE_IMAGE: 'registry.web.boeing.com/container/boeing-images/stack/ubi8-node:8.9-1028-18.14.2'
-  IMAGE_TAG: "${CI_COMMIT_REF_NAME}-${CI_PIPELINE_ID}-${CI_COMMIT_SHORT_SHA}"
-  FQ_IMAGE_NAME: "${CI_REGISTRY_IMAGE}:${CI_PIPELINE_ID}"
-  RULES_CHANGES_PATH: '**/*'
-  AWS_REGION: us-gov-west-1  # Adjust to your AWS region
-  ENTERPRISE_DOCKER_REGISTRY: registry.web.boeing.com  # Your Docker registry
+### Project: `bds-compliance`
 
-# Stages
-stages:
-  - checkout
-  - secret_detection
-  - build
-  - package
-  - deploy
-  - test
-  - destroy
+**Date:** 17th June 2025
 
-# Default configuration for all jobs
-default:
-  tags:
-    - aws-155120177767  # Replace with your AWS runner tags
-    - docker
-    - us-gov-west-1
-  image:
-    name: $ENTERPRISE_DOCKER_REGISTRY/ecs-catalog/docker-images/terraform-cloud-cli/v1.8/aws-v2:1
+#### Overview
 
-# Base Rules
-.base-rules:
-  variables:
-    CF_ORG: TasOrgName
+This report highlights the current resource utilization in the `bds-compliance` project on our OpenShift cluster and proposes an increase in resource quotas to ensure continuous and uninterrupted operations.
 
-# Reusable script for installing Helm
-.install_helm:
-  script:
-    - curl -LO https://sres.web.boeing.com/artifactory/osstools/helmclient/3.4.1/helm-v3.4.1-linux-amd64.tar.gz -u "$CI_ECS_SRES_ACCOUNT:$CI_ECS_SRES_TOKEN" --insecure
-    - tar -xf helm-v3.4.1-linux-amd64.tar.gz
-    - mv linux-amd64/helm /usr/local/bin/helm
+#### Current Resource Utilization Summary
 
-# Reusable script for updating EKS configuration
-.update_eks_config:
-  script:
-    - aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
-    - kubectl delete secret docker-registry regcred --ignore-not-found
-    - kubectl create secret docker-registry regcred --docker-server=$ENTERPRISE_DOCKER_REGISTRY --docker-username=$CI_ECS_GITLAB_ACCOUNT --docker-password=$CI_ECS_GITLAB_TOKEN --docker-email=$CI_PROJECT_EMAIL
+| Resource Type          | Allocated Quota | Current Usage | Usage Percentage |
+| ---------------------- | --------------- | ------------- | ---------------- |
+| CPU                    | 25 cores        | 14 cores      | 56%              |
+| Memory                 | 25Gi            | 15.2Gi        | 61%              |
+| Limits.CPU             | 50 cores        | 29 cores      | 58%              |
+| Limits.Memory          | 50Gi            | 31.2Gi        | 61%              |
+| Pods                   | 50              | 24            | 48%              |
+| PersistentVolumeClaims | 20              | 4             | 20%              |
+| Requests.Storage       | 50Gi            | 4Gi           | 8%               |
 
-# Build stage - compile and test the application
-build:
-  stage: build
-  image: $NODE_IMAGE
-  before_script:
-    - npm config set registry=https://sres.web.boeing.com/artifactory/api/npm/npm-releases
-    - npm config set //sres.web.boeing.com/:_auth=$(echo -n ${ARTIFACTORY_USERNAME}:${ARTIFACTORY_API_TOKEN} | base64 -w 0)
-    - npm install
-  script:
-    - echo "Build and Test"
-    - npm run build
-    # Uncomment the line below for running tests
-    # - npm run test -- --run --testTimeout=30000 --hookTimeout=30000
-  except:
-    - tags
-    - schedules
-  cache:
-    key: $CI_COMMIT_REF_NAME
-    paths:
-      - node_modules/
-  artifacts:
-    name: '${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}'
-    when: always
-    expire_in: 1 week
-    paths:
-      - ./*.js
-      - ./package*.json
-      - dist/
-      - node_modules/
-      - charts/  # Include Helm charts if they exist
+#### Observations
 
-# Package stage - build Docker image
-package:
-  stage: package
-  only:
-    - dev-deploy
-    - test
-    - main
-  image: $ENTERPRISE_DOCKER_REGISTRY/ecs-catalog/docker-images/terraform-cloud-cli/v1.8/aws-v2:1
-  variables:
-    STORAGE_DRIVER: vfs
-    BUILDAH_FORMAT: docker
-    BUILDAH_ISOLATION: chroot
-  script:
-    - echo "Building Docker image for EKS deployment"
-    - chmod +x pipeline/package.sh
-    - ./pipeline/package.sh
-    # Push image to registry
-    - docker tag $FQ_IMAGE_NAME $ENTERPRISE_DOCKER_REGISTRY/$CI_PROJECT_PATH:$IMAGE_TAG
-    - docker push $ENTERPRISE_DOCKER_REGISTRY/$CI_PROJECT_PATH:$IMAGE_TAG
-  except:
-    - schedules
-  needs:
-    - build
+* Memory and CPU utilization have consistently remained above the 55-60% mark, indicating limited capacity for growth and scalability.
+* Pod utilization, while currently moderate, could quickly increase with future service expansion or scaling demands.
+* Current storage and PersistentVolumeClaims usage is low, but anticipated application growth, especially for database and logging services, is expected.
+* Due to resource constraints, replicas are maintained at a minimum level.
+* There is currently no autoscaler implemented for services.
+* The UI service runs with only one replica because it is resource-intensive, and increasing replicas causes total resource consumption to exceed 96%.
 
-# Deploy Template for EKS
-.deploy-template:
-  stage: deploy
-  needs:
-    - build
-    - package
-  before_script:
-    - !reference [.install_helm, script]
-    - !reference [.update_eks_config, script]
-  script:
-    - echo "Deploying to EKS cluster $CLUSTER_NAME"
-    # Update image tag in values or use --set flag
-    - |
-      if [ -f charts/values-${CI_ENVIRONMENT_NAME}.yaml ]; then
-        VALUES_FILE="charts/values-${CI_ENVIRONMENT_NAME}.yaml"
-      else
-        VALUES_FILE="charts/values.yaml"
-      fi
-    - |
-      helm upgrade --install $CHART_NAME-${CI_ENVIRONMENT_NAME} ./charts \
-        --namespace ${CI_ENVIRONMENT_NAME} \
-        --create-namespace \
-        --values $VALUES_FILE \
-        --set image.repository=$ENTERPRISE_DOCKER_REGISTRY/$CI_PROJECT_PATH \
-        --set image.tag=$IMAGE_TAG \
-        --wait \
-        --timeout=300s
+#### Upcoming Changes
 
-# Deploy Dev
-deploy-dev:
-  extends: .deploy-template
-  environment: 
-    name: dev
-    url: https://$CHART_NAME-dev.$AWS_REGION.elb.amazonaws.com  # Adjust URL pattern as needed
-  variables:
-    CLUSTER_NAME: your-dev-eks-cluster  # Replace with dev cluster name
-  only:
-    - dev-deploy
+* Databases will be transitioned to StatefulSets, requiring more robust and persistent storage solutions.
+* New resource-intensive services will be added to the application, significantly increasing resource demand.
+* Pagination will be implemented, expected to increase database and API processing loads.
 
-# Deploy Test
-deploy-test:
-  extends: .deploy-template
-  environment: 
-    name: test
-    url: https://$CHART_NAME-test.$AWS_REGION.elb.amazonaws.com  # Adjust URL pattern as needed
-  variables:
-    CLUSTER_NAME: your-test-eks-cluster  # Replace with test cluster name
-  only:
-    - test
-  when: manual
+#### Risks if Resources are Not Increased
 
-# Deploy Prod
-deploy-prod:
-  extends: .deploy-template
-  environment: 
-    name: prod
-    url: https://$CHART_NAME-prod.$AWS_REGION.elb.amazonaws.com  # Adjust URL pattern as needed
-  variables:
-    CLUSTER_NAME: your-prod-eks-cluster  # Replace with prod cluster name
-  only:
-    - main
-  when: manual
+* Potential for throttling and performance degradation, particularly for CPU and memory-intensive operations.
+* Increased risk of pod eviction due to insufficient memory during peak workloads or deployments.
+* Limited ability to scale new or existing services, affecting business continuity.
 
-# Verify application deployment
-verify_application:
-  stage: test
-  needs:
-    - deploy-dev
-  script:
-    - !reference [.update_eks_config, script]
-    - |
-      # Wait for ingress to be ready
-      echo "Waiting for ingress to be populated..."
-      address=$(kubectl get ingress --namespace dev --no-headers | awk '{print $4}')
-      while [ -z "$address" ] || [ "$address" == "<none>" ]; do
-        echo "Waiting for ingress address to be populated..."
-        sleep 10
-        address=$(kubectl get ingress --namespace dev --no-headers | awk '{print $4}')
-      done
-      echo "Ingress address: $address"
-      
-      # Test the application endpoint
-      echo "Testing application endpoint..."
-      response=$(curl --connect-timeout 10 --max-time 10 --retry 10 --retry-delay 10 --retry-max-time 30 --write-out "HTTPSTATUS:%{http_code}" --silent --output /dev/null http://$address)
-      http_code=$(echo $response | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
-      
-      if [ "$http_code" -eq 200 ]; then
-        echo "Application is responding correctly (HTTP $http_code)"
-      else
-        echo "Application test failed (HTTP $http_code)"
-        exit 1
-      fi
-  only:
-    - dev-deploy
-  allow_failure: true
+#### Recommended New Resource Quotas
 
-# Manual cleanup job
-uninstall_chart:
-  stage: destroy
-  when: manual
-  script:
-    - !reference [.install_helm, script]
-    - !reference [.update_eks_config, script]
-    - |
-      echo "Listing current Helm releases..."
-      helm list --all-namespaces
-      
-      # Uninstall from all environments
-      for env in dev test prod; do
-        echo "Checking for $CHART_NAME-$env..."
-        if helm list --namespace $env | grep -q "$CHART_NAME-$env"; then
-          echo "Uninstalling $CHART_NAME-$env from namespace $env..."
-          helm uninstall $CHART_NAME-$env --namespace $env
-        else
-          echo "Chart $CHART_NAME-$env not found in namespace $env"
-        fi
-      done
-  allow_failure: true
+| Resource Type          | Current Quota | Proposed Quota |
+| ---------------------- | ------------- | -------------- |
+| CPU                    | 25 cores      | 40 cores       |
+| Memory                 | 25Gi          | 40Gi           |
+| Limits.CPU             | 50 cores      | 75 cores       |
+| Limits.Memory          | 50Gi          | 75Gi           |
+| Pods                   | 50            | 75             |
+| PersistentVolumeClaims | 20            | 30             |
+| Requests.Storage       | 50Gi          | 75Gi           |
+| Services               | 50            | 60             |
+
+#### Justification
+
+Increasing the quotas as proposed will provide sufficient headroom to accommodate projected service expansions, prevent resource bottlenecks, and maintain optimal system performance and reliability.
+
