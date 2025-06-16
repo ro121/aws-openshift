@@ -25,9 +25,9 @@ This report highlights the current resource utilization in the `bds-compliance` 
 * Memory and CPU utilization have consistently remained above the 55-60% mark, indicating limited capacity for growth and scalability.
 * Pod utilization, while currently moderate, could quickly increase with future service expansion or scaling demands.
 * Current storage and PersistentVolumeClaims usage is low, but anticipated application growth, especially for database and logging services, is expected.
-* Due to resource constraints, replicas are maintained at a minimum level.
-* There is currently no autoscaler implemented for services.
-* The UI service runs with only one replica because it is resource-intensive, and increasing replicas causes total resource consumption to exceed 96%.
+* Due to resource constraints, replicas are maintained at a minimum level, limiting redundancy and increasing the risk of downtime.
+* There is currently no autoscaler implemented for services, causing manual intervention and delayed response to demand spikes.
+* The UI service runs with only one replica because it is resource-intensive. Observed impacts during resource usage spikes include degraded user experience, slower response times, and increased likelihood of service outages. Increasing replicas even slightly causes total resource consumption to exceed 96%, critically limiting overall cluster health.
 
 #### Upcoming Changes
 
@@ -58,3 +58,16 @@ This report highlights the current resource utilization in the `bds-compliance` 
 
 Increasing the quotas as proposed will provide sufficient headroom to accommodate projected service expansions, prevent resource bottlenecks, and maintain optimal system performance and reliability.
 
+#### Next Steps
+
+* Obtain approval from OpenShift cluster administrators.
+* Implement quota adjustments and monitor utilization.
+* Schedule quarterly reviews to proactively manage resource capacity and demand.
+
+---
+
+Prepared by:
+
+\[Your Name]
+\[Your Job Title]
+\[Date]
