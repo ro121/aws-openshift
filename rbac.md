@@ -4,6 +4,16 @@
 
 This document outlines the standardized implementation of Role-Based Access Control (RBAC) within OpenShift environments across the organization. It serves as a centralized guide for defining, assigning, and managing user roles and permissions to ensure secure, auditable, and consistent access control. By aligning with this policy, teams can streamline access provisioning, minimize security risks, and comply with governance and audit requirements.
 
+In OpenShift, Role-Based Access Control (RBAC) is a powerful framework used to control who can access what resources and perform which actions within a cluster or namespace. It works by assigning permissions (verbs) to roles, and binding those roles to users or groups.
+
+| Concept                | Description                                                       |
+| ---------------------- | ----------------------------------------------------------------- |
+| **Role**               | A set of permissions (rules) scoped to a namespace                |
+| **ClusterRole**        | Like Role, but cluster-scoped (can be used across all namespaces) |
+| **RoleBinding**        | Grants a Role to a user/group within a specific namespace         |
+| **ClusterRoleBinding** | Grants a ClusterRole to a user/group across the entire cluster    |
+
+
 ---
 
 | Resource Type            | Explanation                             | Recommended Assignment         |
