@@ -6,6 +6,24 @@ This document outlines the standardized implementation of Role-Based Access Cont
 
 ---
 
+| Resource Type            | Explanation                             | Recommended Assignment         |
+| ------------------------ | --------------------------------------- | ------------------------------ |
+| `secrets`                | Sensitive credentials                   | DevOps Engineer, Security Team |
+| `rolebindings`           | Security and access control             | Cluster Admin, Platform Admin  |
+| `roles`                  | Security and access definitions         | Cluster Admin, Platform Admin  |
+| `serviceaccounts`        | Service identity and access             | Cluster Admin, DevOps Engineer |
+| `namespaces/projects`    | Project-level administration            | Cluster Admin                  |
+| `configmaps`             | Non-sensitive config data               | Developer, DevOps Engineer     |
+| `imagestreams`           | Container image handling                | Developer, DevOps Engineer     |
+| `buildconfigs`           | Build pipeline management               | Developer, CI/CD Engineer      |
+| `persistentvolumeclaims` | Storage requests (no data-level access) | Developer, Storage Admin       |
+| `routes`                 | Application ingress management          | Developer, DevOps Engineer     |
+| `services`               | Expose applications                     | Developer                      |
+| `deployments`            | Application deployment management       | Developer                      |
+| `pods`                   | Basic operational resource              | Developer                      |
+
+
+
 ### Roles and Access Levels
 
 #### 1. Developer Access
