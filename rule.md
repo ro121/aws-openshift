@@ -1,4 +1,3 @@
-Based on the code snippets provided, here are the specific access policies that are defined:
 
 ## 1. **JWT Token Authentication Policy**
 ```typescript
@@ -99,4 +98,3 @@ request.user = payload;
 - **Traceability**: User identity is available throughout request lifecycle
 - **Audit**: Enables logging and tracking of user actions
 
-These policies work together to create a comprehensive security model that can handle simple authentication through complex business rule enforcement, with particular attention to regulatory compliance requirements.
