@@ -136,10 +136,6 @@ Certain resources are restricted to US persons only due to export control regula
 - ✅ Export-controlled information
 - ✅ Full application functionality
 
-**Geographic Scope**: 
-- United States territory
-- US military bases overseas
-- Authorized international locations with proper licensing
 
 #### 4.1.2 Global/Non-US Access Policy
 
@@ -156,17 +152,10 @@ Certain resources are restricted to US persons only due to export control regula
 - ❌ Export-controlled technical data
 - ❌ Sensitive manufacturing information
 - ❌ Advanced technology specifications
-- ❌ Military/defense-related applications
 
-**Geographic Scope**:
-- All international locations
-- Non-US subsidiaries and offices
-- Third-party partner organizations
+
 
 ### 4.2 Boeing Person Classification
-
-**Policy ID**: COMP-002  
-**Scope**: Company-Specific
 
 **Boeing Personnel** (`user.boeingPerson === true`):
 - Enhanced access to internal systems
@@ -176,7 +165,6 @@ Certain resources are restricted to US persons only due to export control regula
 **Non-Boeing Personnel** (`user.boeingPerson === false`):
 - Limited to customer-facing applications
 - Restricted internal system access
-- Partner/vendor specific interfaces
 
 ---
 
@@ -184,8 +172,6 @@ Certain resources are restricted to US persons only due to export control regula
 
 ### 5.1 Multi-Tenant Isolation
 
-**Policy ID**: APP-001  
-**Scope**: Global
 
 **Policy Rules**:
 - User permissions are isolated by application identifier
@@ -202,8 +188,6 @@ user.roles["finance"] = ["analyst", "approver"]
 
 ### 5.2 Module-Level Access Control
 
-**Policy ID**: APP-002  
-**Scope**: Application-Specific
 
 **Policy Rules**:
 - Fine-grained permissions at the module/feature level
@@ -217,8 +201,6 @@ user.roles["finance"] = ["analyst", "approver"]
 
 ### 6.1 Security Error Messages
 
-**Policy ID**: SEC-001  
-**Scope**: Global
 
 **Standardized Responses**:
 - `401 Unauthorized`: Authentication failures
@@ -227,9 +209,6 @@ user.roles["finance"] = ["analyst", "approver"]
 - Detailed logging for security monitoring
 
 ### 6.2 Audit and Monitoring
-
-**Policy ID**: SEC-002  
-**Scope**: Global
 
 **Requirements**:
 - All authentication attempts are logged
