@@ -89,5 +89,5 @@ resource "kubernetes_secret" "runtime" {
   }
 
   data = var.secrets_data
-  type = "Opaque" // <- This is the part we can improve
+  type = var.secrets_type
 }
