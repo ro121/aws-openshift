@@ -22,6 +22,35 @@ This document provides guidance on managing Splunk alerts for containerized APIs
 - All employees have **read-only** access by default
 - To create or modify alerts, you need **power_user** role or higher
 
+### Splunk Index and Namespace Configuration
+
+The following table shows how Splunk indexes are mapped to OpenShift namespaces:
+
+| Splunk Index | OpenShift Namespace(s) | Environment | Description |
+|--------------|------------------------|-------------|-------------|
+| **bdsdp-global** | `api-dev`<br>`api-pre`<br>`api-prod` | Development<br>Pre-Production<br>Production | Global index capturing logs from all environment namespaces. Use this index for cross-environment searches and dashboards. |
+| **dev** | `api-dev` | Development | Development environment specific logs. Use for dev-only alerts and testing. |
+| **pre** | `api-pre` | Pre-Production | Pre-production environment logs. Use for staging validation and pre-prod monitoring. |
+| **prod** | `api-prod` | Production | Production environment logs. Use for production-only alerts and critical monitoring. |
+
+**Usage Guidelines**:
+- Use `index=bdsdp-global` when you need to search across all environments
+- Use environment-specific indexes (`dev`, `pre`, `prod`) when creating environment-specific alerts
+- For production alerts, consider using `index=prod` to avoid noise from dev/pre environments
+- The `bdsdp-global` index is useful for comparative analysis across environments
+
+**Example Search Queries**:
+```
+# Search across all environments
+index=bdsdp-global namespace="api-*" status=500
+
+# Search production only
+index=prod namespace="api-prod" status=500
+
+# Search specific environment
+index=dev namespace="api-dev" error
+```
+
 ---
 
 ## 2. Obtaining Power User Access
